@@ -303,7 +303,7 @@ pacman -Sy --noconfirm >/dev/null
 print_msg "Package manager configured"
 
 ##############################################################################
-# PHASE 6: Install Base System
+# PHASE 6: INSTALLING BASE SYSTEM (CORRECTED)
 ##############################################################################
 
 print_header "PHASE 6: INSTALLING BASE SYSTEM"
@@ -312,6 +312,7 @@ print_warning "This will take 10-15 minutes depending on internet speed..."
 
 print_step "Installing packages via pacstrap..."
 
+# Removed 'bridge-utils' (deprecated/missing)
 pacstrap -K /mnt \
     base linux-cachyos linux-cachyos-headers \
     linux-firmware amd-ucode \
@@ -320,7 +321,7 @@ pacstrap -K /mnt \
     networkmanager openssh \
     nvidia-dkms nvidia-utils lib32-nvidia-utils \
     qemu-full libvirt virt-manager virt-viewer ovmf swtpm edk2-ovmf \
-    dnsmasq iptables-nft bridge-utils \
+    dnsmasq iptables-nft \
     usbutils libusb \
     docker docker-compose docker-buildx \
     python python-pip python-virtualenv python-numpy \
