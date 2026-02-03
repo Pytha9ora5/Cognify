@@ -212,20 +212,28 @@ btrfs subvolume list /mnt | sed 's/^/  /'
 umount /mnt
 
 ##############################################################################
-# PHASE 4: Mount with Optimized Options (FIXED)
+##############################################################################
+# PHASE 4: MOUNTING FILESYSTEMS (CORRECTED)
 ##############################################################################
 
 print_header "PHASE 4: MOUNTING FILESYSTEMS"
 
+# 1. Mount ROOT first
 print_step "Mounting root subvolume..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@ ${DISK}p3 /mnt
 
-# 1. Create base mount points (excluding nested user paths)
-print_step "Creating base mount point directories..."
-mkdir -p /mnt/{boot,boot/efi,home,var/log,var/lib/docker,.snapshots,var/lib/libvirt/images,mnt/shared}
+# 2. Create Level-1 Mount Points (Directories that exist directly on Root)
+print_step "Creating base mount points..."
+mkdir -p /mnt/home
+mkdir -p /mnt/boot
+mkdir -p /mnt/var/log
+mkdir -p /mnt/var/lib/docker
+mkdir -p /mnt/var/lib/libvirt/images
+mkdir -p /mnt/mnt/shared
+mkdir -p /mnt/.snapshots
 
-# 2. Mount primary subvolumes FIRST
-print_step "Mounting primary subvolumes..."
+# 3. Mount Level-1 Subvolumes/Partitions
+print_step "Mounting home, boot, and var subvolumes..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@home ${DISK}p3 /mnt/home
 mount -o noatime,compress=zstd:2,space_cache=v2,ssd,subvol=@var_log ${DISK}p3 /mnt/var/log
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@var_lib_docker ${DISK}p3 /mnt/var/lib/docker
@@ -233,18 +241,26 @@ mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@snapshots ${DISK}p3 
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@qemu ${DISK}p3 /mnt/var/lib/libvirt/images
 mount -o noatime,compress=zstd:3,space_cache=v2,ssd,subvol=@shared ${DISK}p3 /mnt/mnt/shared
 
-# 3. Create nested directories (NOW that @home is mounted)
-print_step "Creating nested user directories..."
+# Mount the physical Boot partition (p2)
+mount ${DISK}p2 /mnt/boot
+
+# 4. Create Level-2 Mount Points (Directories inside the mounts we just made)
+print_step "Creating nested mount points..."
+
+# Create 'efi' directory INSIDE the mounted boot partition
+mkdir -p /mnt/boot/efi 
+
+# Create 'ai_workspace' directory INSIDE the mounted home subvolume
 mkdir -p /mnt/home/${USERNAME}/ai_workspace
 
-# 4. Mount nested subvolumes
-print_step "Mounting nested subvolumes..."
-mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
+# 5. Mount Level-2 Subvolumes/Partitions
+print_step "Mounting nested partitions..."
 
-# 5. Mount Boot Partitions
-print_step "Mounting boot partitions..."
-mount ${DISK}p2 /mnt/boot
+# Mount EFI partition (p1)
 mount ${DISK}p1 /mnt/boot/efi
+
+# Mount AI Workspace subvolume
+mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
 
 print_msg "Mount structure complete:"
 lsblk -f ${DISK} | sed 's/^/  /'
