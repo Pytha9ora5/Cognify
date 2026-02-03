@@ -212,7 +212,7 @@ btrfs subvolume list /mnt | sed 's/^/  /'
 umount /mnt
 
 ##############################################################################
-# PHASE 4: Mount with Optimized Options
+# PHASE 4: Mount with Optimized Options (FIXED)
 ##############################################################################
 
 print_header "PHASE 4: MOUNTING FILESYSTEMS"
@@ -220,17 +220,12 @@ print_header "PHASE 4: MOUNTING FILESYSTEMS"
 print_step "Mounting root subvolume..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@ ${DISK}p3 /mnt
 
-print_step "Creating mount point directories..."
-mkdir -p /mnt/boot
-mkdir -p /mnt/boot/efi
-mkdir -p /mnt/home
-mkdir -p /mnt/var/log
-mkdir -p /mnt/var/lib/docker
-mkdir -p /mnt/.snapshots
-mkdir -p /mnt/var/lib/libvirt/images
-mkdir -p /mnt/mnt/shared
+# 1. Create base mount points (excluding nested user paths)
+print_step "Creating base mount point directories..."
+mkdir -p /mnt/{boot,boot/efi,home,var/log,var/lib/docker,.snapshots,var/lib/libvirt/images,mnt/shared}
 
-print_step "Mounting subvolumes with optimized options..."
+# 2. Mount primary subvolumes FIRST
+print_step "Mounting primary subvolumes..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@home ${DISK}p3 /mnt/home
 mount -o noatime,compress=zstd:2,space_cache=v2,ssd,subvol=@var_log ${DISK}p3 /mnt/var/log
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@var_lib_docker ${DISK}p3 /mnt/var/lib/docker
@@ -238,19 +233,22 @@ mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@snapshots ${DISK}p3 
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@qemu ${DISK}p3 /mnt/var/lib/libvirt/images
 mount -o noatime,compress=zstd:3,space_cache=v2,ssd,subvol=@shared ${DISK}p3 /mnt/mnt/shared
 
-print_step "Creating user home directory structure..."
-mkdir -p /mnt/home/${USERNAME}
+# 3. Create nested directories (NOW that @home is mounted)
+print_step "Creating nested user directories..."
 mkdir -p /mnt/home/${USERNAME}/ai_workspace
 
-print_step "Mounting ai_workspace subvolume..."
+# 4. Mount nested subvolumes
+print_step "Mounting nested subvolumes..."
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
 
+# 5. Mount Boot Partitions
 print_step "Mounting boot partitions..."
 mount ${DISK}p2 /mnt/boot
 mount ${DISK}p1 /mnt/boot/efi
 
 print_msg "Mount structure complete:"
 lsblk -f ${DISK} | sed 's/^/  /'
+
 
 ##############################################################################
 # PHASE 5: Configure Package Manager
@@ -649,5 +647,18 @@ print_header "PHASE 9: FINALIZING INSTALLATION"
 
 print_step "Unmounting all filesystems..."
 umount -R /mnt 2>/dev/null || true
+swapoff -a 2>/dev/null || true
 
-print_msg "All filesystems unmounte
+print_msg "All filesystems unmounted."
+
+echo ""
+echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}  INSTALLATION COMPLETE!${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+echo ""
+echo "You can now reboot into your new system."
+echo "Don't forget to unplug your installation USB."
+echo ""
+confirm "Press ENTER to reboot now..."
+
+reboot
