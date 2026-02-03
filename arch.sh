@@ -1,424 +1,252 @@
 #!/bin/bash
 set -euo pipefail
 
-##############################################################################
-# Arch Linux Automated Installation Script
-# HP Pavilion Gaming - R7 5800H - RTX 3050 Ti - 500GB NVMe
-# FIXED: Multilib support, Mount Order, Deprecated Packages
-##############################################################################
+################################################################################
+# ARCH LINUX "JUST WORKS" INSTALLER
+# Target: HP Pavilion (R7 5800H / RTX 3050 Ti)
+# Logic: Mimics 'archinstall' default layout (ESP mounted at /boot)
+################################################################################
 
-# Color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-##############################################################################
-# CONFIGURATION - MODIFY THESE IF NEEDED
-##############################################################################
-
-USERNAME=""
-HOSTNAME=""
+# --- CONFIGURATION (MODIFY THIS SECTION) ---
+DISK="/dev/nvme0n1"
+HOSTNAME="arch-hp"
+USERNAME="admin"
+PASSWORD="password"     # Change this!
+ROOT_PASSWORD="password" # Change this!
 TIMEZONE="Africa/Cairo"
 LOCALE="en_US.UTF-8"
-DISK="/dev/nvme0n1"
+KEYMAP="us"
+# Mirror Country
+MIRROR_COUNTRY="Germany"
 
-##############################################################################
-# Helper Functions
-##############################################################################
+# --- HARDWARE SPECIFIC (VFIO / GPU) ---
+# RTX 3050 Ti IDs: 10de:25a0,10de:2291
+VFIO_IDS="10de:25a0,10de:2291"
 
-print_header() {
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  $1${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
-    echo ""
-}
-
-print_step() {
-    echo -e "${BLUE}[STEP]${NC} $1"
-}
-
-print_msg() {
-    echo -e "${GREEN}[✓]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[✗]${NC} $1"
-    exit 1
-}
-
-print_warning() {
-    echo -e "${YELLOW}[!]${NC} $1"
-}
-
-confirm() {
-    echo -e "${YELLOW}$1${NC}"
-    read -p "Press ENTER to continue or CTRL+C to abort: "
-}
-
-##############################################################################
-# Pre-flight Checks
-##############################################################################
-
-print_header "PRE-FLIGHT CHECKS"
-
-if [[ $EUID -ne 0 ]]; then
-   print_error "This script must be run as root. Use: sudo ./install.sh"
-fi
-
-if [[ ! -d /sys/firmware/efi/efivars ]]; then
-    print_error "Not booted in UEFI mode. Reboot in UEFI mode and try again."
-fi
-
-print_step "Checking internet connectivity..."
-if ! ping -c 1 archlinux.org &>/dev/null; then
-    print_error "No internet connection detected."
-fi
-print_msg "Internet connection OK"
-
-if [[ ! -b ${DISK} ]]; then
-    print_error "Disk ${DISK} not found."
-fi
-
-print_step "System Information:"
-echo "  CPU: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
-echo "  RAM: $(free -h | awk '/^Mem:/ {print $2}')"
-echo "  Target Disk: ${DISK}"
-echo ""
-
-##############################################################################
-# Get User Configuration
-##############################################################################
-
-print_header "CONFIGURATION"
-
-while [[ -z "${USERNAME}" ]]; do
-    read -p "Enter username for new user: " USERNAME
-    if [[ ! "${USERNAME}" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-        print_error "Invalid username. Use lowercase letters."
-        USERNAME=""
-    fi
-done
-
-while [[ -z "${HOSTNAME}" ]]; do
-    read -p "Enter hostname: " HOSTNAME
-    if [[ ! "${HOSTNAME}" =~ ^[a-z0-9-]+$ ]]; then
-        print_error "Invalid hostname."
-        HOSTNAME=""
-    fi
-done
-
-echo ""
-confirm "WARNING: This will DESTROY ALL DATA on ${DISK}!"
-
-##############################################################################
-# Cleanup
-##############################################################################
-
-print_header "CLEANUP"
+################################################################################
+# 1. CLEANUP & PREP
+################################################################################
+echo "==> Cleaning up previous attempts..."
 umount -R /mnt 2>/dev/null || true
 swapoff -a 2>/dev/null || true
-sleep 2
-print_msg "Cleanup complete"
+wipefs -af ${DISK} >/dev/null
+sgdisk --zap-all ${DISK} >/dev/null
 
-##############################################################################
-# PHASE 1: Disk Partitioning
-##############################################################################
-
-print_header "PHASE 1: DISK PARTITIONING"
-
-print_step "Wiping disk..."
-wipefs -af ${DISK} >/dev/null 2>&1
-sgdisk --zap-all ${DISK} >/dev/null 2>&1
-
-print_step "Creating partitions..."
-sgdisk -n 1:0:+1G -t 1:ef00 -c 1:"EFI" ${DISK} >/dev/null
-sgdisk -n 2:0:+1G -t 2:8300 -c 2:"BOOT" ${DISK} >/dev/null
-sgdisk -n 3:0:0 -t 3:8300 -c 3:"ROOT" ${DISK} >/dev/null
+################################################################################
+# 2. PARTITIONING (The "Archinstall" Layout)
+# Partition 1: 2GB FAT32 (EFI + Boot) -> Mounts to /boot
+# Partition 2: Rest BTRFS (Root)      -> Mounts to /
+################################################################################
+echo "==> Partitioning (Simple Layout)..."
+sgdisk -n 1:0:+2G -t 1:ef00 -c 1:"EFI_BOOT" ${DISK}
+sgdisk -n 2:0:0   -t 2:8300 -c 2:"ROOT"     ${DISK}
 
 partprobe ${DISK}
-sleep 3
-print_msg "Partitions created"
+sleep 2
 
-##############################################################################
-# PHASE 2: Format Filesystems
-##############################################################################
+echo "==> Formatting..."
+mkfs.fat -F32 -n BOOT ${DISK}p1
+mkfs.btrfs -f -L ROOT ${DISK}p2
 
-print_header "PHASE 2: FORMATTING"
+################################################################################
+# 3. SUBVOLUMES & MOUNTING
+################################################################################
+echo "==> Creating Subvolumes..."
+mount ${DISK}p2 /mnt
 
-print_step "Formatting EFI (FAT32)..."
-mkfs.fat -F32 ${DISK}p1 >/dev/null 2>&1
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@snapshots
+btrfs subvolume create /mnt/@var_log
+btrfs subvolume create /mnt/@var_lib_docker
+btrfs subvolume create /mnt/@qemu
+btrfs subvolume create /mnt/@ai_workspace
 
-print_step "Formatting BOOT (ext4)..."
-mkfs.ext4 -F ${DISK}p2 >/dev/null 2>&1
-
-print_step "Formatting ROOT (BTRFS)..."
-mkfs.btrfs -f -L archlinux ${DISK}p3 >/dev/null 2>&1
-
-print_msg "Formatting complete"
-
-##############################################################################
-# PHASE 3: Create BTRFS Subvolumes
-##############################################################################
-
-print_header "PHASE 3: BTRFS SUBVOLUMES"
-
-mount ${DISK}p3 /mnt
-btrfs subvolume create /mnt/@ >/dev/null
-btrfs subvolume create /mnt/@home >/dev/null
-btrfs subvolume create /mnt/@var_log >/dev/null
-btrfs subvolume create /mnt/@var_lib_docker >/dev/null
-btrfs subvolume create /mnt/@snapshots >/dev/null
-btrfs subvolume create /mnt/@qemu >/dev/null
-btrfs subvolume create /mnt/@shared >/dev/null
-btrfs subvolume create /mnt/@ai_workspace >/dev/null
 umount /mnt
 
-print_msg "Subvolumes created"
+echo "==> Mounting..."
+# Mount Root
+mount -o noatime,compress=zstd:1,space_cache=v2,subvol=@ ${DISK}p2 /mnt
 
-##############################################################################
-# PHASE 4: Mounting (FIXED ORDER)
-##############################################################################
-
-print_header "PHASE 4: MOUNTING FILESYSTEMS"
-
-# 1. Mount ROOT first
-print_step "Mounting root subvolume..."
-mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@ ${DISK}p3 /mnt
-
-# 2. Create Level-1 Mount Points
-print_step "Creating base directories..."
-mkdir -p /mnt/{home,boot,var/log,var/lib/docker,.snapshots,var/lib/libvirt/images,mnt/shared}
-
-# 3. Mount Level-1 Subvolumes/Partitions
-print_step "Mounting home, var, and boot..."
-mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@home ${DISK}p3 /mnt/home
-mount -o noatime,compress=zstd:2,space_cache=v2,ssd,subvol=@var_log ${DISK}p3 /mnt/var/log
-mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@var_lib_docker ${DISK}p3 /mnt/var/lib/docker
-mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@snapshots ${DISK}p3 /mnt/.snapshots
-mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@qemu ${DISK}p3 /mnt/var/lib/libvirt/images
-mount -o noatime,compress=zstd:3,space_cache=v2,ssd,subvol=@shared ${DISK}p3 /mnt/mnt/shared
-
-# Mount Boot Partition (p2)
-mount ${DISK}p2 /mnt/boot
-
-# 4. Create Level-2 Mount Points (Nested)
-print_step "Creating nested directories..."
-mkdir -p /mnt/boot/efi
+# Create directories
+mkdir -p /mnt/{boot,home,.snapshots,var/log,var/lib/docker,var/lib/libvirt/images}
 mkdir -p /mnt/home/${USERNAME}/ai_workspace
 
-# 5. Mount Level-2 Subvolumes/Partitions
-print_step "Mounting EFI and Workspace..."
-mount ${DISK}p1 /mnt/boot/efi
-mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
+# Mount BOOT (The fix for HP Laptops)
+mount ${DISK}p1 /mnt/boot
 
-print_msg "Mounts complete"
+# Mount Subvolumes
+mount -o noatime,compress=zstd:1,space_cache=v2,subvol=@home ${DISK}p2 /mnt/home
+mount -o noatime,compress=zstd:1,space_cache=v2,subvol=@snapshots ${DISK}p2 /mnt/.snapshots
+mount -o noatime,compress=zstd:1,space_cache=v2,subvol=@var_log ${DISK}p2 /mnt/var/log
+mount -o noatime,compress=no,nodatacow,subvol=@var_lib_docker ${DISK}p2 /mnt/var/lib/docker
+mount -o noatime,compress=no,nodatacow,subvol=@qemu ${DISK}p2 /mnt/var/lib/libvirt/images
+# AI Workspace (NoCoW for speed)
+mount -o noatime,compress=no,nodatacow,subvol=@ai_workspace ${DISK}p2 /mnt/home/${USERNAME}/ai_workspace
 
-##############################################################################
-# PHASE 5: Configure Package Manager (FIXED MULTILIB)
-##############################################################################
+################################################################################
+# 4. PACMAN CONFIG & CACHYOS REPOS
+################################################################################
+echo "==> Configuring Repositories..."
 
-print_header "PHASE 5: CONFIGURING PACMAN"
-
-print_step "Enabling parallel downloads..."
+# 1. Enable Multilib (Critical for Steam/Wine/Nvidia 32bit)
+sed -i "/\[multilib\]/,/Include/"'s/^#//' /etc/pacman.conf
 sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
 
-print_step "Enabling multilib repository (Required for lib32)..."
-# This uncommenting command fixes the 'lib32-nvidia-utils' error
-sed -i "/\[multilib\]/,/Include/"'s/^#//' /etc/pacman.conf
+# 2. Add CachyOS Keys & Repos (Before Pacstrap)
+pacman-key --init
+pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com
+pacman-key --lsign-key F3B607488DB35A47
 
-print_step "Adding CachyOS repository..."
+# Add CachyOS to top of pacman.conf
 if ! grep -q "\[cachyos\]" /etc/pacman.conf; then
-    cat >> /etc/pacman.conf << 'EOF'
-
-[cachyos]
-Include = /etc/pacman.d/cachyos-mirrorlist
-EOF
-
-    cat > /etc/pacman.d/cachyos-mirrorlist << 'EOF'
-Server = https://mirror.cachyos.org/repo/$arch/$repo
-Server = https://cdn.cachyos.org/repo/$arch/$repo
-EOF
+    sed -i '1i [cachyos]\nInclude = /etc/pacman.d/cachyos-mirrorlist\n' /etc/pacman.conf
+    # Create mirrorlist
+    echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" > /etc/pacman.d/cachyos-mirrorlist
+    echo "Server = https://cdn.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.d/cachyos-mirrorlist
 fi
 
-print_step "Importing keys..."
-pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com 2>/dev/null || true
-pacman-key --lsign-key F3B607488DB35A47 2>/dev/null || true
+# 3. Optimize Mirrors (Germany)
+reflector --country ${MIRROR_COUNTRY} --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
 
-print_step "Syncing databases..."
-pacman -Sy --noconfirm >/dev/null
+pacman -Sy
 
-##############################################################################
-# PHASE 6: Install Base System (FIXED PACKAGES)
-##############################################################################
+################################################################################
+# 5. INSTALLATION (PACSTRAP)
+################################################################################
+echo "==> Installing Packages..."
 
-print_header "PHASE 6: INSTALLING PACKAGES"
-print_warning "Downloading packages..."
+PACKAGES=(
+    # Core
+    base base-devel linux-cachyos linux-cachyos-headers linux-firmware amd-ucode
+    btrfs-progs networkmanager openssh
+    
+    # Bootloader
+    efibootmgr
+    
+    # GPU / Passthrough
+    nvidia-dkms nvidia-utils lib32-nvidia-utils
+    
+    # Virtualization
+    qemu-full libvirt virt-manager virt-viewer ovmf swtpm edk2-ovmf dnsmasq iptables-nft
+    
+    # Docker / AI
+    docker docker-compose docker-buildx python python-pip python-virtualenv python-numpy ffmpeg
+    
+    # Desktop (Hyprland)
+    hyprland xdg-desktop-portal-hyprland polkit-kde-agent qt5-wayland qt6-wayland sddm
+    waybar rofi-wayland dunst swww grim slurp wl-clipboard cliphist kitty
+    thunar thunar-volman gvfs
+    
+    # Audio / Bluetooth
+    pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber pavucontrol
+    bluez bluez-utils
+    
+    # Utils
+    git neovim vim htop btop wget curl unzip zip zram-generator
+    
+    # Fonts
+    ttf-dejavu ttf-liberation noto-fonts noto-fonts-emoji
+)
 
-# Removed: bridge-utils (deprecated)
-# Added: [multilib] is enabled, so lib32-nvidia-utils will work
-pacstrap -K /mnt \
-    base linux-cachyos linux-cachyos-headers \
-    linux-firmware amd-ucode \
-    base-devel git neovim vim nano \
-    btrfs-progs \
-    networkmanager openssh \
-    nvidia-dkms nvidia-utils lib32-nvidia-utils \
-    qemu-full libvirt virt-manager virt-viewer ovmf swtpm edk2-ovmf \
-    dnsmasq iptables-nft \
-    usbutils libusb \
-    docker docker-compose docker-buildx \
-    python python-pip python-virtualenv python-numpy \
-    ffmpeg \
-    hyprland xdg-desktop-portal-hyprland \
-    polkit-kde-agent qt5-wayland qt6-wayland \
-    sddm \
-    waybar rofi-wayland dunst swww grim slurp wl-clipboard cliphist \
-    kitty \
-    thunar thunar-volman gvfs \
-    pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber pavucontrol \
-    ttf-dejavu ttf-liberation noto-fonts noto-fonts-emoji \
-    brightnessctl playerctl bluez bluez-utils \
-    nm-connection-editor \
-    zram-generator \
-    man-db man-pages \
-    htop btop \
-    wget curl unzip zip \
-    2>&1 | while read line; do echo "  $line"; done
+pacstrap -K /mnt "${PACKAGES[@]}"
 
-if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-    print_error "Pacstrap failed. Check internet or mirror status."
-fi
-
-print_msg "Base system installed"
-
-##############################################################################
-# PHASE 7: Generate fstab
-##############################################################################
-
-print_header "PHASE 7: GENERATING FSTAB"
+################################################################################
+# 6. SYSTEM CONFIGURATION
+################################################################################
+echo "==> Generating Fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
-print_msg "fstab generated"
 
-##############################################################################
-# PHASE 8: Chroot Configuration
-##############################################################################
+echo "==> Configuring System..."
 
-print_header "PHASE 8: SYSTEM CONFIGURATION"
-
-cat > /mnt/root/chroot-config.sh << CHROOTEOF
+cat > /mnt/root/setup.sh <<EOF
 #!/bin/bash
-set -euo pipefail
 
-# Ensure multilib is enabled inside chroot as well for future updates
-sed -i "/\[multilib\]/,/Include/"'s/^#//' /etc/pacman.conf
-
-echo "[*] Setting timezone..."
+# Time & Locale
 ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
 hwclock --systohc
-
-echo "[*] Configuring locale..."
 sed -i "s/^#${LOCALE}/${LOCALE}/" /etc/locale.gen
-locale-gen >/dev/null 2>&1
+locale-gen
 echo "LANG=${LOCALE}" > /etc/locale.conf
-
-echo "[*] Setting hostname..."
+echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 echo "${HOSTNAME}" > /etc/hostname
-cat > /etc/hosts << EOF
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
-EOF
+echo "127.0.0.1 localhost" >> /etc/hosts
+echo "127.0.1.1 ${HOSTNAME}.localdomain ${HOSTNAME}" >> /etc/hosts
 
-echo "[*] Configuring mkinitcpio..."
-# Added nvidia modules
+# Users
+echo "root:${ROOT_PASSWORD}" | chpasswd
+useradd -m -G wheel,libvirt,docker,video,audio,input -s /bin/bash ${USERNAME}
+echo "${USERNAME}:${PASSWORD}" | chpasswd
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
+chmod 440 /etc/sudoers.d/wheel
+
+# Fix Permissions
+chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/ai_workspace
+
+# Initramfs (Nvidia Modules)
 sed -i 's/^MODULES=()/MODULES=(amdgpu nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
-mkinitcpio -P >/dev/null 2>&1
+mkinitcpio -P
 
-echo "[*] Configuring Bootloader..."
-bootctl install >/dev/null 2>&1
+# Bootloader (Systemd-boot)
+bootctl install
 
-ROOT_UUID=\$(blkid -s UUID -o value ${DISK}p3)
+# HP BIOS FIX: Copy bootloader to fallback path
+mkdir -p /boot/EFI/BOOT
+cp /boot/EFI/systemd/systemd-bootx64.efi /boot/EFI/BOOT/BOOTX64.EFI
 
-cat > /boot/loader/loader.conf << 'EOF'
-default 01-arch-vfio.conf
-timeout 5
-console-mode max
-editor no
-EOF
+# Loader Config
+echo "timeout 5" > /boot/loader/loader.conf
+echo "default arch-vfio.conf" >> /boot/loader/loader.conf
 
-# Note: Using linux-cachyos image names
-cat > /boot/loader/entries/01-arch-vfio.conf << EOF
+# 1. VFIO Entry (Windows VM Ready)
+cat > /boot/loader/entries/arch-vfio.conf <<BOOT
 title   Arch Linux (VFIO)
 linux   /vmlinuz-linux-cachyos
 initrd  /amd-ucode.img
 initrd  /initramfs-linux-cachyos.img
-options root=UUID=\${ROOT_UUID} rootflags=subvol=@ rw amd_iommu=on iommu=pt video=efifb:off vfio-pci.ids=10de:25a0,10de:2291 kvm.ignore_msrs=1 kvm_amd.npt=1 kvm_amd.avic=1
-EOF
+options root=UUID=$(blkid -s UUID -o value ${DISK}p2) rootflags=subvol=@ rw amd_iommu=on iommu=pt video=efifb:off vfio-pci.ids=${VFIO_IDS} kvm.ignore_msrs=1
+BOOT
 
-cat > /boot/loader/entries/02-arch-nvidia.conf << EOF
-title   Arch Linux (NVIDIA)
+# 2. NVIDIA Entry (AI/Docker Ready)
+cat > /boot/loader/entries/arch-nvidia.conf <<BOOT
+title   Arch Linux (NVIDIA/AI)
 linux   /vmlinuz-linux-cachyos
 initrd  /amd-ucode.img
 initrd  /initramfs-linux-cachyos.img
-options root=UUID=\${ROOT_UUID} rootflags=subvol=@ rw amd_iommu=on iommu=pt kvm.ignore_msrs=1 kvm_amd.npt=1 kvm_amd.avic=1
+options root=UUID=$(blkid -s UUID -o value ${DISK}p2) rootflags=subvol=@ rw amd_iommu=on iommu=pt
+BOOT
+
+# Enable Services
+systemctl enable NetworkManager
+systemctl enable sddm
+systemctl enable libvirtd
+systemctl enable docker
+systemctl enable bluetooth
+
+# ZRAM (Swap)
+echo "[zram0]" > /etc/systemd/zram-generator.conf
+echo "zram-size = ram / 2" >> /etc/systemd/zram-generator.conf
+echo "compression-algorithm = zstd" >> /etc/systemd/zram-generator.conf
+
+# 16GB Swap File (BTRFS friendly)
+truncate -s 0 /swapfile
+chattr +C /swapfile
+dd if=/dev/zero of=/swapfile bs=1M count=16384 status=none
+chmod 600 /swapfile
+mkswap /swapfile
+echo "/swapfile none swap sw,pri=10 0 0" >> /etc/fstab
+
 EOF
 
-echo "[*] User Configuration..."
-echo "Set ROOT password:"
-passwd
-useradd -m -G wheel,libvirt,docker,video,audio,input -s /bin/bash ${USERNAME}
-echo "Set USER password for ${USERNAME}:"
-passwd ${USERNAME}
-echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
-chmod 440 /etc/sudoers.d/wheel
+chmod +x /mnt/root/setup.sh
+arch-chroot /mnt /root/setup.sh
+rm /mnt/root/setup.sh
 
-echo "[*] Enabling Services..."
-systemctl enable NetworkManager sddm libvirtd docker bluetooth
-
-echo "[*] ZRAM Config..."
-cat > /etc/systemd/zram-generator.conf << 'EOF'
-[zram0]
-zram-size = ram / 4
-compression-algorithm = zstd
-EOF
-
-echo "[*] Swapfile..."
-mkdir -p /swap
-truncate -s 0 /swap/swapfile
-chattr +C /swap/swapfile
-dd if=/dev/zero of=/swap/swapfile bs=1M count=8192 status=none
-chmod 600 /swap/swapfile
-mkswap /swap/swapfile >/dev/null
-echo "/swap/swapfile none swap sw,pri=10 0 0" >> /etc/fstab
-
-echo "[*] Permissions..."
-# Fix permissions for the nested AI workspace
-chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/ai_workspace
-chmod -R 755 /home/${USERNAME}/ai_workspace
-
-CHROOTEOF
-
-chmod +x /mnt/root/chroot-config.sh
-print_step "Running chroot configuration..."
-arch-chroot /mnt /root/chroot-config.sh
-rm /mnt/root/chroot-config.sh
-
-##############################################################################
-# PHASE 9: Finalize
-##############################################################################
-
-print_header "PHASE 9: FINISHING UP"
-print_step "Unmounting..."
-umount -R /mnt 2>/dev/null || true
-swapoff -a 2>/dev/null || true
-
-echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  INSTALLATION COMPLETE! REBOOTING...${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-confirm "Press ENTER to reboot."
+################################################################################
+# 7. FINISH
+################################################################################
+echo "==> Installation Complete!"
+echo "    Rebooting in 5 seconds..."
+sleep 5
+umount -R /mnt
 reboot
