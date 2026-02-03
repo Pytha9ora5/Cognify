@@ -206,7 +206,6 @@ echo "  Options: noatime,compress=zstd:1,space_cache=v2,ssd"
 
 print_step "Creating base directory structure..."
 mkdir -p /mnt/boot
-mkdir -p /mnt/boot/efi
 mkdir -p /mnt/home
 mkdir -p /mnt/var/log
 mkdir -p /mnt/var/lib/docker
@@ -214,6 +213,18 @@ mkdir -p /mnt/.snapshots
 mkdir -p /mnt/var/lib/libvirt/images
 mkdir -p /mnt/mnt/shared
 print_msg "Base directories created"
+
+print_step "Mounting boot partition..."
+mount ${DISK}p2 /mnt/boot
+echo "  ✓ ${DISK}p2 → /mnt/boot (ext4)"
+
+print_step "Creating EFI mount point inside boot..."
+mkdir -p /mnt/boot/efi
+print_msg "EFI directory created"
+
+print_step "Mounting EFI partition..."
+mount ${DISK}p1 /mnt/boot/efi
+echo "  ✓ ${DISK}p1 → /mnt/boot/efi (FAT32)"
 
 print_step "Mounting subvolumes..."
 
@@ -243,13 +254,6 @@ print_msg "User directories created"
 print_step "Mounting ai_workspace subvolume..."
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
 echo "  ✓ @ai_workspace → /mnt/home/${USERNAME}/ai_workspace (no compress, no CoW)"
-
-print_step "Mounting boot partitions..."
-mount ${DISK}p2 /mnt/boot
-echo "  ✓ ${DISK}p2 → /mnt/boot (ext4)"
-
-mount ${DISK}p1 /mnt/boot/efi
-echo "  ✓ ${DISK}p1 → /mnt/boot/efi (FAT32)"
 
 echo ""
 print_msg "All filesystems mounted"
