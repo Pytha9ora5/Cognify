@@ -221,7 +221,14 @@ print_step "Mounting root subvolume..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@ ${DISK}p3 /mnt
 
 print_step "Creating mount point directories..."
-mkdir -p /mnt/{boot,boot/efi,home,var/log,var/lib/docker,.snapshots,var/lib/libvirt/images,mnt/shared,home/${USERNAME}/ai_workspace}
+mkdir -p /mnt/boot
+mkdir -p /mnt/boot/efi
+mkdir -p /mnt/home
+mkdir -p /mnt/var/log
+mkdir -p /mnt/var/lib/docker
+mkdir -p /mnt/.snapshots
+mkdir -p /mnt/var/lib/libvirt/images
+mkdir -p /mnt/mnt/shared
 
 print_step "Mounting subvolumes with optimized options..."
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@home ${DISK}p3 /mnt/home
@@ -230,6 +237,12 @@ mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@var_lib_docker
 mount -o noatime,compress=zstd:1,space_cache=v2,ssd,subvol=@snapshots ${DISK}p3 /mnt/.snapshots
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@qemu ${DISK}p3 /mnt/var/lib/libvirt/images
 mount -o noatime,compress=zstd:3,space_cache=v2,ssd,subvol=@shared ${DISK}p3 /mnt/mnt/shared
+
+print_step "Creating user home directory structure..."
+mkdir -p /mnt/home/${USERNAME}
+mkdir -p /mnt/home/${USERNAME}/ai_workspace
+
+print_step "Mounting ai_workspace subvolume..."
 mount -o noatime,compress=no,space_cache=v2,ssd,nodatacow,subvol=@ai_workspace ${DISK}p3 /mnt/home/${USERNAME}/ai_workspace
 
 print_step "Mounting boot partitions..."
