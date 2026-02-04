@@ -1,4 +1,4 @@
-```bash
+
 #!/bin/bash
 # Arch Linux + Hyprland Installation Script for HP Pavilion ec2019ne
 # Ryzen 7 5800H + RTX 3050Ti | iGPU-focused config
