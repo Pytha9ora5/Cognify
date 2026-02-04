@@ -2,8 +2,8 @@
 set -e
 
 DISK="/dev/nvme0n1"
-HOSTNAME="arch-hybrid"
-USERNAME="user"
+HOSTNAME="arch"
+USERNAME="muhammad"
 REGION="Africa"
 CITY="Cairo"
 
